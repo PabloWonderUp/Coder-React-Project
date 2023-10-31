@@ -7,8 +7,8 @@ function App() {
       <NavBar/>
       <ItemListContainer greeting={'Pablo'}/>
       <h1 className="text-3xl font-bold underline">
-      Hello world!
-    </h1>
+       ReadWave
+      </h1>
 
     </>
   )
