@@ -10,7 +10,34 @@ import os
 import re
 import sys
 
+import gspread
+from google.oauth2.service_account import Credentials
 import pdfplumber
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+COLUMNAS_SHEET = [
+    "Proveedor",
+    "Tipo de Gastos",
+    "Detalle",
+    "Monto",
+    "Nota",
+    "Nro. Factura",
+    "Transferencia",
+]
+
+CAMPOS_JSON = [
+    "proveedor",
+    "tipo_gastos",
+    "detalle",
+    "monto",
+    "nota",
+    "nro_factura",
+    "transferencia",
+]
 
 
 def extraer_texto(pdf_path: str) -> list[str]:
@@ -204,6 +231,54 @@ def procesar_pdf(pdf_path: str) -> list[dict] | dict:
     return resultados
 
 
+def conectar_sheets(credenciales_path: str) -> gspread.Client:
+    """Conecta a Google Sheets usando credenciales de cuenta de servicio."""
+    creds = Credentials.from_service_account_file(credenciales_path, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+
+def enviar_a_sheets(
+    client: gspread.Client,
+    spreadsheet_id: str,
+    datos: list[dict],
+    hoja: str = "Hoja 1",
+):
+    """
+    Envía los datos extraídos a una hoja de Google Sheets.
+    Crea los encabezados si la hoja está vacía y agrega una fila por factura.
+    """
+    try:
+        spreadsheet = client.open_by_key(spreadsheet_id)
+    except gspread.SpreadsheetNotFound:
+        print(
+            f"Error: No se encontró la hoja con ID '{spreadsheet_id}'. "
+            "Verificá que el ID sea correcto y que la cuenta de servicio tenga acceso.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Obtener o crear la hoja de trabajo
+    try:
+        worksheet = spreadsheet.worksheet(hoja)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=hoja, rows=1000, cols=10)
+
+    # Agregar encabezados si la hoja está vacía
+    valores_existentes = worksheet.get_all_values()
+    if not valores_existentes:
+        worksheet.append_row(COLUMNAS_SHEET)
+        print(f"Encabezados creados en hoja '{hoja}'.")
+
+    # Agregar una fila por cada factura
+    filas_agregadas = 0
+    for factura in datos:
+        fila = [str(factura.get(campo, "")) for campo in CAMPOS_JSON]
+        worksheet.append_row(fila)
+        filas_agregadas += 1
+
+    print(f"{filas_agregadas} factura(s) agregada(s) a Google Sheets.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Procesa facturas argentinas en PDF y extrae datos en JSON."
@@ -221,6 +296,21 @@ def main():
         "--texto",
         action="store_true",
         help="Mostrar también el texto extraído del PDF (para depuración)",
+    )
+    parser.add_argument(
+        "--sheets",
+        metavar="SPREADSHEET_ID",
+        help="ID de la Google Spreadsheet donde enviar los datos",
+    )
+    parser.add_argument(
+        "--credenciales",
+        default="credenciales.json",
+        help="Ruta al archivo JSON de credenciales de cuenta de servicio (default: credenciales.json)",
+    )
+    parser.add_argument(
+        "--hoja",
+        default="Hoja 1",
+        help="Nombre de la hoja de trabajo dentro del Spreadsheet (default: 'Hoja 1')",
     )
 
     args = parser.parse_args()
@@ -257,6 +347,20 @@ def main():
         print(f"Resultado guardado en '{args.output}'")
     else:
         print(json_str)
+
+    # Enviar a Google Sheets si se especificó
+    if args.sheets:
+        if not os.path.isfile(args.credenciales):
+            print(
+                f"Error: No se encontró el archivo de credenciales '{args.credenciales}'.\n"
+                "Descargá el JSON de cuenta de servicio desde Google Cloud Console.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        datos = todos_los_resultados
+        client = conectar_sheets(args.credenciales)
+        enviar_a_sheets(client, args.sheets, datos, hoja=args.hoja)
 
 
 if __name__ == "__main__":
